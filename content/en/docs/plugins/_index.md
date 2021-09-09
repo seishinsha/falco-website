@@ -187,7 +187,7 @@ Plugins authored by the Falcosecurity community are at the [plugins github repos
 
 ## Golang plugin SDK
 
-To facilitate the development of plugins written in Go, we've written a [SDK](https://github.com/falcosecurity/libsinsp-plugin-sdk-go) that provides support code for writing plugins. The SDK provides go structs/enums corresponding to the C structs/enums used by the API and provides function wrappers that take care of the details of converting between go types and C types.
+To facilitate the development of plugins written in Go, we've written a [SDK](https://github.com/falcosecurity/plugin-sdk-go) that provides support code for writing plugins. The SDK provides go structs/enums corresponding to the C structs/enums used by the API and provides function wrappers that take care of the details of converting between go types and C types.
 
 The cloudtrail plugin uses this SDK.
 

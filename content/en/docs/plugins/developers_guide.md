@@ -41,7 +41,7 @@ Some API functions are required, while others are optional. If a function is opt
 
 Every API function that returns or populates a string or struct pointer must point to allocated memory, allocated with `malloc()`. The plugin framework will free the allocated memory with calls to `free()`.
 
-For plugins written in Go, the [libsinsp-plugin-sdk-go](https://github.com/falcosecurity/libsinsp-plugin-sdk-go) package provides utility functions that handle the conversion between Go types (e.g. `string`) and C types (e.g. `char *`).
+For plugins written in Go, the [plugin-sdk-go](https://github.com/falcosecurity/plugin-sdk-go) module provides utility functions that handle the conversion between Go types (e.g. `string`) and C types (e.g. `char *`).
 
 ## Cgo pitfalls with packages
 
@@ -203,7 +203,7 @@ When managing plugin-level state, keep the following in mind:
 
 * It is the plugin's responsibility to allocate plugin state (memory, open files, etc) and free that state later in `plugin_destroy`.
 * The plugin state should be the *only* location for state (e.g. no globals, no per-thread state). Although unlikely, the framework may choose to call `plugin_init` multiple times for the same plugin, and this should be supported by the plugin.
-* The returned rc value should be `SCAP_SUCCESS` (0) on success, `SCAP_FAILURE` (1) on failure.
+* The returned rc value should be `SS_PLUGIN_SUCCESS` (0) on success, `SS_PLUGIN_FAILURE` (1) on failure.
 * On failure, make sure to return a meaningful error message in the next call to `plugin_get_last_error()`.
 * On failure, the plugin framework will *not* call plugin_destroy, so do not return any allocated state.
 
@@ -257,14 +257,14 @@ Remember that *both* the event data in `data` as well as the surrounding struct 
 
 This function should return:
 
-* `SCAP_SUCCESS` (0) on success
-* `SCAP_FAILURE` (1) on failure
-* `SCAP_TIMEOUT` (-1) on non-error but there are no events to return.
-* `SCAP_EOF` (6) when the stream of events is complete.
+* `SS_PLUGIN_SUCCESS` (0) on success
+* `SS_PLUGIN_FAILURE` (1) on failure
+* `SS_PLUGIN_TIMEOUT` (-1) on non-error but there are no events to return.
+* `SS_PLUGIN_EOF` (6) when the stream of events is complete.
 
-If the plugin receives a SCAP_FAILURE, it will close the stream of events by calling `plugin_close`.
+If the plugin receives a SS_PLUGIN_FAILURE, it will close the stream of events by calling `plugin_close`.
 
-SCAP_TIMEOUT should be returned whenever an event can not be returned immediately. This ensures that the plugin framework is not stalled waiting for a response from `plugin_next`. When the framework receives a SCAP_TIMEOUT, it will keep the stream of events open and call `plugin_next` again later.
+SS_PLUGIN_TIMEOUT should be returned whenever an event can not be returned immediately. This ensures that the plugin framework is not stalled waiting for a response from `plugin_next`. When the framework receives a SS_PLUGIN_TIMEOUT, it will keep the stream of events open and call `plugin_next` again later.
 
 #### `int32_t plugin_next_batch(ss_plugin_t* s, ss_instance_t* h, uint32_t *nevts, ss_plugin_event **evts) [Required: no]`
 
@@ -272,7 +272,7 @@ This function is the batched version of `plugin_next` and allows the plugin to r
 
 This function is optional. If not defined the plugin framework will only call `plugin_next()` to retrieve events.
 
-If your plugin is written in Go, the [libsinsp-plugin-sdk-go](https://github.com/falcosecurity/libsinsp-plugin-sdk-go) package provides a utility function `sinsp.NextBatch` that can wrap a plugin's `next()` function and take care of the conversion/allocation from Go types to C types. That package is described in more detail below.
+If your plugin is written in Go, the [plugin-sdk-go](https://github.com/falcosecurity/plugin-sdk-go) module provides a utility function `sinsp.NextBatch` that can wrap a plugin's `next()` function and take care of the conversion/allocation from Go types to C types. That package is described in more detail below.
 
 #### `char* plugin_get_progress(ss_plugin_t* s, ss_instance_t* h, uint32_t* progress_pct) [Required: no]`
 
@@ -329,13 +329,13 @@ For each struct, the plugin fills in `field`/`arg`/`ftype` with the field. The p
 
 If `field_present` is set to false, the plugin framework assumes that `res_str`/`res_u64` is undefined and will not use or free() it.
 
-Similar to `next_batch()`, the [libsinsp-plugin-sdk-go](https://github.com/falcosecurity/libsinsp-plugin-sdk-go) package provides a utility function `sinsp.WrapExtractFuncs` that can wrap simpler functions that extract individual values and handle the type conversion/iteration over fields. That package is described in more detail below.
+Similar to `next_batch()`, the [plugin-sdk-go](https://github.com/falcosecurity/plugin-sdk-go) module provides a utility function `sinsp.WrapExtractFuncs` that can wrap simpler functions that extract individual values and handle the type conversion/iteration over fields. That package is described in more detail below.
 
 #### `int32_t (*register_async_extractor)(ss_plugin_t *s, async_extractor_info *info) [Required: no]`
 
 This optional, advanced function is used to amortize the overhead of Cgo function calls across multiple calls to `extract_fields()`. Implementing it properly requires close coordination with the plugin framework to coordinate synchronous updates to the provided struct as well as notifications to/from the plugin framework.
 
-There shouldn't be any need to implement this function directly in plugins. For plugins written in C, the overhead is low and amortization is not required. For plugins written in Go, the [libsinsp-plugin-sdk-go](https://github.com/falcosecurity/libsinsp-plugin-sdk-go) package provides a utility function `sinsp.RegisterAsyncExtractors` that can wrap simpler functions that extract individual values and handle the interactions with the plugin framework.
+There shouldn't be any need to implement this function directly in plugins. For plugins written in C, the overhead is low and amortization is not required. For plugins written in Go, the [plugin-sdk-go](https://github.com/falcosecurity/plugin-sdk-go) module provides a utility function `sinsp.RegisterAsyncExtractors` that can wrap simpler functions that extract individual values and handle the interactions with the plugin framework.
 
 If not defined, the plugin framework will use the simpler `plugin_get_fields()` function instead.
 
@@ -388,17 +388,23 @@ The source code for this plugin can be found at [dummy.go](https://github.com/fa
 ```go
 package main
 
-// #cgo CFLAGS: -I${FALCOSECURITY_LIBS_DIR}/userspace/libscap
+// #cgo CFLAGS: -I${SRCDIR}/../../
 /*
 #include <plugin_info.h>
 */
 ...
 import (
-	"github.com/falcosecurity/libsinsp-plugin-sdk-go/pkg/sinsp"
+	"github.com/falcosecurity/plugin-sdk-go"
+	"github.com/falcosecurity/plugin-sdk-go/state"
+	"github.com/falcosecurity/plugin-sdk-go/wrappers"
 )
 ```
 
-Including `plugin_info.h` allows for direct use of generated Go types for C structs/types like `C.ss_plugin_event`, `C.ss_plugin_extract_field`, etc. The libsinsp-plugin-sdk-go package provides utility functions and types that handle some of the conversions between C types and Go types.
+Including `plugin_info.h` allows for direct use of generated Go types for C structs/types like `C.ss_plugin_event`, `C.ss_plugin_extract_field`, etc. The plugin-sdk-go module provides utility functions and types that handle some of the conversions between C types and Go types.
+
+`plugin_info.h` is not included with the dummy plugin, but you can retrieve it from [here](https://github.com/falcosecurity/libs/blob/master/userspace/libscap/plugin_info.h). The exact value for CFLAGS will depend on the location of `plugin_info.h` relative to dummy.go. In the plugins repository, `plugin_info.h` is two directories above `dummy.go`, hence the `../../`.
+
+The go module `falcosecurity/plugin-sdk-go` has its own [documentation](https://pkg.go.dev/falcosecurity/plugin-sdk-go) as well.
 
 ### Info Functions
 
@@ -426,7 +432,7 @@ func plugin_get_required_api_version() *C.char {
 //export plugin_get_type
 func plugin_get_type() uint32 {
 	log.Printf("[%s] plugin_get_type\n", PluginName)
-	return sinsp.TypeSourcePlugin
+	return sdk.TypeSourcePlugin
 }
 
 ...
@@ -452,7 +458,7 @@ Note that fields are represented in Go as `sinsp.FieldEntry` structs, which allo
 func plugin_get_fields() *C.char {
 	log.Printf("[%s] plugin_get_fields\n", PluginName)
 
-	flds := []sinsp.FieldEntry{
+	flds := []sdk.FieldEntry{
 		{Type: "uint64", Name: "dummy.divisible", ArgRequired: true, Desc: "Return 1 if the value is divisible by the provided divisor, 0 otherwise"},
 		{Type: "uint64", Name: "dummy.value", Desc: "The sample value in the event"},
 		{Type: "string", Name: "dummy.strvalue", Desc: "The sample value in the event, as a string"},
@@ -471,14 +477,14 @@ func plugin_get_fields() *C.char {
 
 When the plugin encounters an error, it saves the Error object in `pluginState.lastError`. `plugin_get_last_error` converts that error to a string, returns it, and clears the saved Error object.
 
-Note the use of `sinsp.Context` to obtain the wrapped pluginState struct that was originally added via a call to `sinsp.SetContext()`.
+Note the use of `state.Context` to obtain the wrapped pluginState struct that was originally added via a call to `state.SetContext()`.
 
 ```go
 //export plugin_get_last_error
 func plugin_get_last_error(pState unsafe.Pointer) *C.char {
 	log.Printf("[%s] plugin_get_last_error\n", PluginName)
 
-	ps := (*pluginState)(sinsp.Context(pState))
+	ps := (*pluginState)(state.Context(pState))
 
 	if ps.lastError != nil {
 		str := C.CString(ps.lastError.Error())
@@ -491,7 +497,7 @@ func plugin_get_last_error(pState unsafe.Pointer) *C.char {
 
 ### Initializing/Destroying the Plugin
 
-The plugin-level state is held in a `pluginState` struct. `plugin_init` creates a pluginState struct, parses the config argument, and uses `sinsp.NewStateContainer()/sinsp.SetContext()` to wrap a pointer to the pluginState struct so it can be returned from Cgo.
+The plugin-level state is held in a `pluginState` struct. `plugin_init` creates a pluginState struct, parses the config argument, and uses `state.NewStateContainer()/state.SetContext()` to wrap a pointer to the pluginState struct so it can be returned from Cgo.
 
 The wrapping is required as Cgo does not allow passing go pointers directly back to C. These functions behave in a similar way to go 1.17's [Handle](https://pkg.go.dev/runtime/cgo@go1.17#Handle) struct.
 
@@ -526,11 +532,11 @@ func plugin_init(config *C.char, rc *int32) unsafe.Pointer {
 	var obj map[string]uint64
 	err := json.Unmarshal([]byte(cfg), &obj)
 	if err != nil {
-		*rc = sinsp.ScapFailure
+		*rc = sdk.SSPluginFailure
 		return nil
 	}
 	if _, ok := obj["jitter"]; !ok {
-		*rc = sinsp.ScapFailure
+		*rc = sdk.SSPluginFailure
 		return nil
 	}
 
@@ -543,11 +549,11 @@ func plugin_init(config *C.char, rc *int32) unsafe.Pointer {
 
 	// In order to avoid breaking the Cgo pointer passing rules,
 	// we wrap the plugin state in a handle using
-	// sinsp.NewStateContainer()
-	handle := sinsp.NewStateContainer()
-	sinsp.SetContext(handle, unsafe.Pointer(ps))
+	// state.NewStateContainer()
+	handle := state.NewStateContainer()
+	state.SetContext(handle, unsafe.Pointer(ps))
 
-	*rc = sinsp.ScapSuccess
+	*rc = sdk.SSPluginSuccess
 
 	return handle
 }
@@ -557,7 +563,7 @@ func plugin_destroy(pState unsafe.Pointer) {
 	log.Printf("[%s] plugin_destroy\n", PluginName)
 
 	// This frees the pluginState struct inside this handle
-	sinsp.Free(pState)
+	state.Free(pState)
 }
 ```
 
@@ -593,7 +599,7 @@ func plugin_open(pState unsafe.Pointer, params *C.char, rc *int32) unsafe.Pointe
 	prms := C.GoString(params)
 	log.Printf("[%s] plugin_open, params: %s\n", PluginName, prms)
 
-	ps := (*pluginState)(sinsp.Context(pState))
+	ps := (*pluginState)(state.Context(pState))
 
 	// The format of params is a json object with two params:
 	// - "start", which denotes the initial value of sample
@@ -604,18 +610,18 @@ func plugin_open(pState unsafe.Pointer, params *C.char, rc *int32) unsafe.Pointe
 	err := json.Unmarshal([]byte(prms), &obj)
 	if err != nil {
 		ps.lastError = fmt.Errorf("Params %s could not be parsed: %v", prms, err)
-		*rc = sinsp.ScapFailure
+		*rc = sdk.SSPluginFailure
 		return nil
 	}
 	if _, ok := obj["start"]; !ok {
 		ps.lastError = fmt.Errorf("Params %s did not contain start property", prms)
-		*rc = sinsp.ScapFailure
+		*rc = sdk.SSPluginFailure
 		return nil
 	}
 
 	if _, ok := obj["maxEvents"]; !ok {
 		ps.lastError = fmt.Errorf("Params %s did not contain maxEvents property", prms)
-		*rc = sinsp.ScapFailure
+		*rc = sdk.SSPluginFailure
 		return nil
 	}
 
@@ -626,10 +632,10 @@ func plugin_open(pState unsafe.Pointer, params *C.char, rc *int32) unsafe.Pointe
 		sample:     obj["start"],
 	}
 
-	handle := sinsp.NewStateContainer()
-	sinsp.SetContext(handle, unsafe.Pointer(is))
+	handle := state.NewStateContainer()
+	state.SetContext(handle, unsafe.Pointer(is))
 
-	*rc = sinsp.ScapSuccess
+	*rc = sdk.SSPluginSuccess
 	return handle
 }
 
@@ -637,31 +643,31 @@ func plugin_open(pState unsafe.Pointer, params *C.char, rc *int32) unsafe.Pointe
 func plugin_close(pState unsafe.Pointer, iState unsafe.Pointer) {
 	log.Printf("[%s] plugin_close\n", PluginName)
 
-	sinsp.Free(iState)
+	state.Free(iState)
 }
 ```
 
 ### Returning Events
 
-The plugin does not populate a `ss_plugin_event` struct directly. Instead, a higher-level function `Next()` populates and returns a `sinsp.PluginEvent` struct. `plugin_next` is a small wrapper function that calls `Next()` and uses `sinsp.Events()` to convert the `sinsp.PluginEvent` struct to a `C.ss_plugin_event` struct.
+The plugin does not populate a `ss_plugin_event` struct directly. Instead, a higher-level function `Next()` populates and returns a `sdk.PluginEvent` struct. `plugin_next` is a small wrapper function that calls `Next()` and uses `wrappers.Events()` to convert the `sdk.PluginEvent` struct to a `C.ss_plugin_event` struct.
 
-Similarly, the plugin's `plugin_next_batch` uses a wrapper function `sinsp.NextBatch()`, which calls Next() as needed to prepare a batch of events, and uses `sinsp.Events()` to convert the batch to an array of `C.ss_plugin_event` structs.
+Similarly, the plugin's `plugin_next_batch` uses a wrapper function `wrappers.NextBatch()`, which calls Next() as needed to prepare a batch of events, and uses `wrappers.Events()` to convert the batch to an array of `C.ss_plugin_event` structs.
 
 For this plugin, the event payload is simply the sample value as a null-terminated C string.
 
 ```go
 // This higher-level function will be called by both plugin_next and plugin_next_batch
-func Next(pState unsafe.Pointer, iState unsafe.Pointer) (*sinsp.PluginEvent, int32) {
+func Next(pState unsafe.Pointer, iState unsafe.Pointer) (*sdk.PluginEvent, int32) {
 	log.Printf("[%s] Next\n", PluginName)
 
-	ps := (*pluginState)(sinsp.Context(pState))
-	is := (*instanceState)(sinsp.Context(iState))
+	ps := (*pluginState)(state.Context(pState))
+	is := (*instanceState)(state.Context(iState))
 
 	is.counter++
 
 	// Return eof if reached maxEvents
 	if is.counter >= is.maxEvents {
-		return nil, sinsp.ScapEOF
+		return nil, sdk.SSPluginEOF
 	}
 
 	// Increment sample by 1, also add a jitter of [0:jitter]
@@ -673,13 +679,13 @@ func Next(pState unsafe.Pointer, iState unsafe.Pointer) (*sinsp.PluginEvent, int
 	// It is not mandatory to set the Timestamp of the event (it
 	// would be filled in by the framework if set to uint_max),
 	// but it's a good practice.
-	evt := &sinsp.PluginEvent{
+	evt := &sdk.PluginEvent{
 		Evtnum:    is.counter,
 		Data:      []byte(str),
 		Timestamp: uint64(time.Now().Unix()) * 1000000000,
 	}
 
-	return evt, sinsp.ScapSuccess
+	return evt, sdk.SSPluginSuccess
 }
 
 //export plugin_next
@@ -687,8 +693,8 @@ func plugin_next(pState unsafe.Pointer, iState unsafe.Pointer, retEvt **C.ss_plu
 	log.Printf("[%s] plugin_next\n", PluginName)
 
 	evt, res := Next(pState, iState)
-	if res == sinsp.ScapSuccess {
-		*retEvt = (*C.ss_plugin_event)(sinsp.Events([]*sinsp.PluginEvent{evt}))
+	if res == sdk.SSPluginSuccess {
+		*retEvt = (*C.ss_plugin_event)(wrappers.Events([]*sdk.PluginEvent{evt}))
 	}
 
 	return res
@@ -699,10 +705,10 @@ func plugin_next(pState unsafe.Pointer, iState unsafe.Pointer, retEvt **C.ss_plu
 
 //export plugin_next_batch
 func plugin_next_batch(pState unsafe.Pointer, iState unsafe.Pointer, nevts *uint32, retEvts **C.ss_plugin_event) int32 {
-	evts, res := sinsp.NextBatch(pState, iState, Next)
+	evts, res := wrappers.NextBatch(pState, iState, Next)
 
-	if res == sinsp.ScapSuccess {
-		*retEvts = (*C.ss_plugin_event)(sinsp.Events(evts))
+	if res == sdk.SSPluginSuccess {
+		*retEvts = (*C.ss_plugin_event)(wrappers.Events(evts))
 		*nevts = (uint32)(len(evts))
 	}
 
@@ -736,7 +742,7 @@ func plugin_event_to_string(pState unsafe.Pointer, data *C.uint8_t, datalen uint
 
 Similar to Next(), the implementation of field extraction is performed by higher-level go functions `extract_str`/`extract_u64` that work on a single field and are type-specific based on the field value (string vs uint64).
 
-`plugin_extract_fields` wraps these functions using `sinsp.WrapExtractFuncs()`, which handles the details of iterating over the fields and converting go types to C types.
+`plugin_extract_fields` wraps these functions using `wrappers.WrapExtractFuncs()`, which handles the details of iterating over the fields and converting go types to C types.
 
 ```go
 // This plugin only needs to implement simpler single-field versions
@@ -746,7 +752,7 @@ Similar to Next(), the implementation of field extraction is performed by higher
 func extract_str(pState unsafe.Pointer, evtnum uint64, data []byte, ts uint64, field string, arg string) (bool, string) {
 	log.Printf("[%s] extract_str\n", PluginName)
 
-	ps := (*pluginState)(sinsp.Context(pState))
+	ps := (*pluginState)(state.Context(pState))
 
 	switch field {
 	case "dummy.strvalue":
@@ -760,7 +766,7 @@ func extract_str(pState unsafe.Pointer, evtnum uint64, data []byte, ts uint64, f
 func extract_u64(pState unsafe.Pointer, evtnum uint64, data []byte, ts uint64, field string, arg string) (bool, uint64) {
 	log.Printf("[%s] extract_str\n", PluginName)
 
-	ps := (*pluginState)(sinsp.Context(pState))
+	ps := (*pluginState)(state.Context(pState))
 
 	val, err := strconv.Atoi(string(data))
 	if err != nil {
@@ -793,7 +799,7 @@ func extract_u64(pState unsafe.Pointer, evtnum uint64, data []byte, ts uint64, f
 //export plugin_extract_fields
 func plugin_extract_fields(pState unsafe.Pointer, evt *C.struct_ss_plugin_event, numFields uint32, fields *C.struct_ss_plugin_extract_field) int32 {
 	log.Printf("[%s] plugin_extract_fields\n", PluginName)
-	return sinsp.WrapExtractFuncs(pState, unsafe.Pointer(evt), numFields, unsafe.Pointer(fields), extract_str, extract_u64)
+	return wrappers.WrapExtractFuncs(pState, unsafe.Pointer(evt), numFields, unsafe.Pointer(fields), extract_str, extract_u64)
 }
 ```
 
@@ -801,7 +807,7 @@ func plugin_extract_fields(pState unsafe.Pointer, evt *C.struct_ss_plugin_event,
 
 If a plugin is expected to generate a high volume of events (e.g. > 1000/second), it may be useful to amortize the cost of calling Go functions from C by using the asynchronous field extraction interface. This involves a single function call from C with synchronization/coordination around a shared C struct, combined with spin waits/signaling between the plugin framework and the plugin. Using asynchronous field extraction has costs in terms of performing the spin waits/signaling, so only use it if these costs are lower than the overhead of calling go functions from the plugin framework.
 
-From the plugin perspective, this simply involves using the higher-level `extract_str`/`extract_u64` functions again with a wrapper function `sinsp.RegisterAsyncExtractors()`:
+From the plugin perspective, this simply involves using the higher-level `extract_str`/`extract_u64` functions again with a wrapper function `wrappers.RegisterAsyncExtractors()`:
 
 ```go
 // This wraps the simple extract functions above to allow for multiple
@@ -814,7 +820,7 @@ From the plugin perspective, this simply involves using the higher-level `extrac
 
 //export plugin_register_async_extractor
 func plugin_register_async_extractor(pluginState unsafe.Pointer, asyncExtractorInfo unsafe.Pointer) int32 {
-	return sinsp.RegisterAsyncExtractors(pluginState, asyncExtractorInfo, extract_str, extract_u64)
+	return wrappers.RegisterAsyncExtractors(pluginState, asyncExtractorInfo, extract_str, extract_u64)
 }
 ```
 
@@ -925,7 +931,7 @@ The source code for this plugin can be found at [dummy.cpp](https://github.com/f
 
 ### Initial header include
 
-`scap.h` provides useful constants for things like return values, and `plugin_info.h` defines structs/enums like `ss_plugin_t`, `ss_instance_t`, `ss_plugin_event`, etc. The [json](https://github.com/nlohmann/json) header file provides helpful c++ classes to parse/represent json objects.
+`plugin_info.h` defines structs/enums like `ss_plugin_t`, `ss_instance_t`, `ss_plugin_event`, etc, as well as function return values like SS_PLUGIN_SUCCESS, SS_PLUGIN_FAILURE, etc. The [json](https://github.com/nlohmann/json) header file provides helpful c++ classes to parse/represent json objects.
 
 ```c++
 #include <string>
@@ -934,7 +940,6 @@ The source code for this plugin can be found at [dummy.cpp](https://github.com/f
 
 #include <nlohmann/json.hpp>
 
-#include <scap.h>
 #include <plugin_info.h>
 
 using json = nlohmann::json;
@@ -1048,7 +1053,7 @@ ss_plugin_t* plugin_init(char* config, int32_t* rc)
 	ret->last_error = "";
 	ret->jitter = *it;
 
-	*rc = SCAP_SUCCESS;
+	*rc = SS_PLUGIN_SUCCESS;
 
 	return ret;
 }
@@ -1088,7 +1093,7 @@ ss_instance_t* plugin_open(ss_plugin_t* s, char* params, int32_t* rc)
 	catch (std::exception &e)
 	{
 		ps->last_error = std::string("Params ") + params + " could not be parsed: " + e.what();
-		*rc = SCAP_FAILURE;
+		*rc = SS_PLUGIN_FAILURE;
 		return NULL;
 	}
 
@@ -1096,7 +1101,7 @@ ss_instance_t* plugin_open(ss_plugin_t* s, char* params, int32_t* rc)
 	if(start_it == obj.end())
 	{
 		ps->last_error = std::string("Params ") + params + " did not contain start property";
-		*rc = SCAP_FAILURE;
+		*rc = SS_PLUGIN_FAILURE;
 		return NULL;
 	}
 
@@ -1104,7 +1109,7 @@ ss_instance_t* plugin_open(ss_plugin_t* s, char* params, int32_t* rc)
 	if(max_events_it == obj.end())
 	{
 		ps->last_error = std::string("Params ") + params + " did not contain maxEvents property";
-		*rc = SCAP_FAILURE;
+		*rc = SS_PLUGIN_FAILURE;
 		return NULL;
 	}
 
@@ -1116,7 +1121,7 @@ ss_instance_t* plugin_open(ss_plugin_t* s, char* params, int32_t* rc)
 	ret->max_events = *max_events_it;
 	ret->sample = *start_it;
 
-	*rc = SCAP_SUCCESS;
+	*rc = SS_PLUGIN_SUCCESS;
 
 	return ret;
 }
@@ -1151,7 +1156,7 @@ int32_t plugin_next(ss_plugin_t* s, ss_instance_t* i, ss_plugin_event **evt)
 
 	if(istate->counter > istate->max_events)
 	{
-		return SCAP_EOF;
+		return SS_PLUGIN_EOF;
 	}
 
 	// Increment sample by 1, also add a jitter of [0:jitter]
@@ -1171,7 +1176,7 @@ int32_t plugin_next(ss_plugin_t* s, ss_instance_t* i, ss_plugin_event **evt)
 
 	*evt = ret;
 
-	return SCAP_SUCCESS;
+	return SS_PLUGIN_SUCCESS;
 }
 ```
 
@@ -1243,7 +1248,7 @@ int32_t plugin_extract_fields(ss_plugin_t *s, const ss_plugin_event *evt, uint32
 		}
 	}
 
-	return SCAP_SUCCESS;
+	return SS_PLUGIN_SUCCESS;
 }
 ```
 
