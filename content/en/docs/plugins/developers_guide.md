@@ -255,6 +255,8 @@ The struct has the following members:
 
 Remember that *both* the event data in `data` as well as the surrounding struct in `evt` must be allocated by the plugin and will be free()d by the plugin framework.
 
+It is not necessary to fill in the evtnum struct member when returning events via plugin_next/plugin_next_batch. Event numbers are allocated by the plugin framework.
+
 This function should return:
 
 * `SS_PLUGIN_SUCCESS` (0) on success
@@ -585,11 +587,10 @@ type instanceState struct {
 	// The number of events to return before EOF
 	maxEvents uint64
 
-	// A count of events returned. This is put in every event as
-	// the evtnum property.
+	// A count of events returned. Used to count against maxEvents.
 	counter uint64
 
-	// A semi-random numeric value, derived from the counter and
+	// A semi-random numeric value, derived from this value and
 	// jitter. This is put in every event as the data property.
 	sample uint64
 }
@@ -655,6 +656,8 @@ Similarly, the plugin's `plugin_next_batch` uses a wrapper function `wrappers.Ne
 
 For this plugin, the event payload is simply the sample value as a null-terminated C string.
 
+Notice that although the function returns a `sdk.PluginEvent` struct, it does *not* fill in the Evtnum field. This is because event numbers are assigned by the plugin framework. The event number will be returned in calls to extract_fields, however.
+
 ```go
 // This higher-level function will be called by both plugin_next and plugin_next_batch
 func Next(pState unsafe.Pointer, iState unsafe.Pointer) (*sdk.PluginEvent, int32) {
@@ -680,7 +683,6 @@ func Next(pState unsafe.Pointer, iState unsafe.Pointer) (*sdk.PluginEvent, int32
 	// would be filled in by the framework if set to uint_max),
 	// but it's a good practice.
 	evt := &sdk.PluginEvent{
-		Evtnum:    is.counter,
 		Data:      []byte(str),
 		Timestamp: uint64(time.Now().Unix()) * 1000000000,
 	}
@@ -1143,6 +1145,8 @@ void plugin_close(ss_plugin_t* s, ss_instance_t* i)
 
 The event data representation is just the sample as a string. The plugin uses `std::to_string()`, `.c_str()`, and `strdup` to return an allocated data buffer in the `ss_plugin_event` struct.
 
+Notice that although the function allocates and returns a `ss_plugin_event` struct, it does *not* fill in the evtnum struct member. This is because event numbers are assigned by the plugin framework. The event number will be returned in calls to extract_fields, however.
+
 ```c++
 extern "C"
 int32_t plugin_next(ss_plugin_t* s, ss_instance_t* i, ss_plugin_event **evt)
@@ -1167,7 +1171,6 @@ int32_t plugin_next(ss_plugin_t* s, ss_instance_t* i, ss_plugin_event **evt)
 
 	struct ss_plugin_event *ret = (struct ss_plugin_event *) malloc(sizeof(ss_plugin_event));
 
-	ret->evtnum = istate->counter;
 	ret->data = (uint8_t *) strdup(payload.c_str());
 	ret->datalen = payload.size();
 
